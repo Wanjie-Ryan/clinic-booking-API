@@ -1,0 +1,65 @@
+name: clinic-booking
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: clinic-mysql
+    hostname: mysql
+    restart: unless-stopped
+    networks:
+      - clinicnet
+    # Published on 3307, not 3306, so this cannot collide with a MySQL
+    # already running on the host.
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: clinic
+      MYSQL_DATABASE: clinic
+      MYSQL_USER: clinic
+      MYSQL_PASSWORD: clinic
+      TZ: UTC
+    command:
+      # Appointments are stored in UTC (see README D-07). Pinning the server
+      # timezone to UTC means a DATETIME written by the app is read back as the
+      # exact same wall-clock value, with no implicit local-time conversion
+      # anywhere in the round trip.
+      - --default-time-zone=+00:00
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      # CMD-SHELL (not CMD) so $MYSQL_ROOT_PASSWORD expands inside the container.
+      # The $$ escapes the $ past Compose's own variable substitution.
+      test:
+        [
+          "CMD-SHELL",
+          'mysqladmin ping -h 127.0.0.1 -uroot -p"$$MYSQL_ROOT_PASSWORD" --silent',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: clinic-redis
+    hostname: redis
+    restart: unless-stopped
+    networks:
+      - clinicnet
+    ports:
+      - "6380:6379"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+networks:
+  clinicnet:
+    driver: bridge
+
+volumes:
+  mysql_data:

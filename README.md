@@ -53,7 +53,7 @@ Four tables. No slot table — see §1.4 for why.
 | --- | --- | --- |
 | `id` | `BIGINT` PK, auto-increment | |
 | `name` | `VARCHAR(200)` | |
-| `created`, `updated` | `DATETIME` / `TIMESTAMP` | Touchvas house convention |
+| `created`, `updated` | `DATETIME` / `TIMESTAMP` | insert time / last-modified time |
 
 A doctor is a *resource that gets scheduled against*, not an actor. There are no doctor
 endpoints in this version — see [D-09](#6-decision-log).
@@ -142,9 +142,6 @@ message saying the slot was just taken — not a generic `500`. The database is 
 mutual exclusion; the application's only job is to translate the outcome into the right
 HTTP status.
 
-This mirrors an existing pattern in our casino-service, which classifies a MySQL
-duplicate-key error into a `409` rather than letting it surface as an internal error.
-
 #### What I deliberately did not do
 
 **No `sync.Mutex`.** A process-local mutex serialises bookings within one running
@@ -172,10 +169,10 @@ in the uncontended case and rejects the loser instantly in the contended one.
 #### Trade-off I accepted
 
 The generated-column trick is MySQL-specific. On PostgreSQL this would be a one-line
-partial unique index and arguably cleaner. I picked MySQL because it is what the
-Touchvas services this codebase is styled after run on, and because the constraint is
-expressible either way — the *design* (let the database enforce the invariant) ports;
-only the *syntax* does not.
+partial unique index and arguably cleaner. I picked MySQL because it is the database I
+am most comfortable operating and debugging under time pressure, and because the
+constraint is expressible either way — the *design* (let the database enforce the
+invariant) ports; only the *syntax* does not.
 
 ### 1.4 Availability: computed, not stored
 
@@ -295,12 +292,12 @@ app/
 migrations/                 golang-migrate .up.sql / .down.sql pairs
 ```
 
-This mirrors the Touchvas identity-service and casino-service layout deliberately —
-root `main.go`, everything under `app/`, the same package names and the same
-responsibilities in each. The one thing worth calling out is `app/library`: in those
-services it is where pure, dependency-free helpers live and it is the package that
-carries the test file. That is exactly where the slot-generation and validation logic
-sits here, which is what makes the booking rules testable without standing up MySQL.
+Each package has one job: `controllers` binds and validates a request and shapes a
+response, `library` holds pure logic with no framework or database dependency,
+`database` owns connection setup, `models` owns the shapes that cross package
+boundaries. `library` is deliberately the layer with no `*sql.DB` and no `echo.Context`
+in its function signatures — that is what makes the slot-generation and validation
+logic testable without standing up MySQL.
 
 ### 1.9 What I would build next
 
@@ -391,5 +388,5 @@ rather than reconstructed at the end.
 | **D-07** | Appointment times are stored in UTC; working hours are clinic-local wall clock; conversion happens in Go against `CLINIC_TIMEZONE`. | Working hours are wall-clock facts, appointments are instants. Kenya has no DST so the two coincide today, but code that assumes local time is UTC-plus-a-constant fails silently in a DST jurisdiction. |
 | **D-08** | No authentication. `patient_id` comes from the request body. | The assessment does not ask for auth and adding it would expand scope well past the brief. Recorded here as a known gap rather than an oversight — in production `patient_id` must come from a verified token, not the body. (§1.9) |
 | **D-09** | Doctors are a passive scheduled-against resource with no endpoints of their own. | The scenario describes exactly one actor who takes actions: the patient. Doctor and working-hour management is an admin surface the brief does not describe, so inventing one would be scope I was not asked for. Seed data covers the five doctors. |
-| **D-10** | Dependencies (MySQL, Redis) run on non-default host ports 3307 and 6380. | So `docker compose up` cannot collide with a MySQL or Redis already running on the developer's machine. Matches the port-remapping convention in the Touchvas sample compose files. |
+| **D-10** | Dependencies (MySQL, Redis) run on non-default host ports 3307 and 6380. | So `docker compose up` cannot collide with a MySQL or Redis already running on the developer's machine. |
 | **D-11** | Redis runs with persistence disabled (`--save "" --appendonly no`). | Everything in it is a cache entry or a short-lived idempotency key. Nothing in Redis needs to survive a restart, and saying so in the container config documents that the data there is disposable. |
