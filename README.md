@@ -331,21 +331,43 @@ Explicitly out of scope for this assessment, but these are the seams I left:
 ### Start the dependencies
 
 ```bash
-cp .env.example .env
 docker compose up -d
 docker compose ps        # wait until both services report (healthy)
 ```
 
 MySQL is published on host port **3307** and Redis on **6380** so they cannot collide
-with a MySQL or Redis you already run locally. `.env.example` already points at those
-ports.
+with a MySQL or Redis you already run locally. `.env` at the repo root already points
+at those ports and is read directly — there is no separate example file and no config
+library; every value is a plain `os.Getenv` call with an inline fallback in code.
 
-Stop them with `docker compose down`, or `docker compose down -v` to also drop the
-MySQL volume and start from an empty database.
+Stop the containers with `docker compose down`, or `docker compose down -v` to also
+drop the MySQL volume and start from an empty database.
 
 ### Run the API
 
-_Added in Phase 3._
+There is no `.env`-loading library in this codebase (see the dependency list in the
+standing rules), so local environment variables have to be exported into the shell
+before running the binary:
+
+```bash
+set -a; source .env; set +a
+
+go mod tidy                    # resolves go.mod / go.sum from the imports in the code
+SETUP_TYPE=migrate go run .    # applies every pending migration, then exits
+go run .                       # starts the HTTP server (SETUP_TYPE defaults to "all")
+```
+
+`SETUP_TYPE=migrate` is a one-shot mode: it creates the database if it isn't already
+there, applies every pending migration, logs `migrations applied`, and exits — it never
+starts the HTTP server. That's deliberate: it's what Railway runs as the pre-deploy
+command before starting the real server container. More on this in §4.
+
+Confirm it's up:
+
+```bash
+curl http://localhost:8080/healthz
+# {"database":"ok","redis":"ok"}
+```
 
 ### Run the tests
 
@@ -390,3 +412,5 @@ rather than reconstructed at the end.
 | **D-09** | Doctors are a passive scheduled-against resource with no endpoints of their own. | The scenario describes exactly one actor who takes actions: the patient. Doctor and working-hour management is an admin surface the brief does not describe, so inventing one would be scope I was not asked for. Seed data covers the five doctors. |
 | **D-10** | Dependencies (MySQL, Redis) run on non-default host ports 3307 and 6380. | So `docker compose up` cannot collide with a MySQL or Redis already running on the developer's machine. |
 | **D-11** | Redis runs with persistence disabled (`--save "" --appendonly no`). | Everything in it is a cache entry or a short-lived idempotency key. Nothing in Redis needs to survive a restart, and saying so in the container config documents that the data there is disposable. |
+| **D-12** | The request logging middleware logs method, path, status, latency and trace ID — never the request or response body. | A booking payload carries a patient's name, email and phone number. There is no operational reason for that to sit in application logs, so the body-capturing pattern I could have used elsewhere is deliberately not used here. |
+| **D-13** | Startup runs `CREATE DATABASE IF NOT EXISTS` using the same credentials the app connects with, rather than requiring a separate privileged migration user. | Verified directly: against a database that doesn't exist yet and a scoped user, MySQL correctly refuses this with an access-denied error — but against a database that already exists (which is guaranteed here, since `docker-compose.yml` provisions it via `MYSQL_DATABASE` and Railway's MySQL plugin does the same), the statement is a no-op and succeeds even for a non-privileged user. That's the actual deployment shape in both environments, so no separate admin credential is needed. |
