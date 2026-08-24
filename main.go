@@ -69,6 +69,8 @@ func main() {
 		return
 	}
 
+	runMigrations(ctx)
+
 	var a router.App
 	a.Initialize(tracer, ctx)
 	a.Run()
