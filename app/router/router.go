@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/redis/go-redis/v9"
+	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/Wanjie-Ryan/clinic-booking-API/app/controllers"
@@ -32,10 +35,31 @@ func (a *App) Initialize(tr trace.Tracer, ctx context.Context) {
 	a.DB = database.DbInstance()
 	a.RedisConn = database.RedisClient()
 
+	loc, err := time.LoadLocation(os.Getenv("CLINIC_TIMEZONE"))
+	if err != nil {
+		logrus.WithContext(ctx).WithFields(logrus.Fields{
+			"description": "invalid CLINIC_TIMEZONE, falling back to UTC",
+		}).Warn(err.Error())
+		loc = time.UTC
+	}
+
+	slotMinutes, err := strconv.Atoi(os.Getenv("SLOT_DURATION_MINUTES"))
+	if err != nil || slotMinutes <= 0 {
+		slotMinutes = 30
+	}
+
+	leadMinutes, err := strconv.Atoi(os.Getenv("BOOKING_MINIMUM_LEAD_MINUTES"))
+	if err != nil || leadMinutes < 0 {
+		leadMinutes = 60
+	}
+
 	a.Controller = &controllers.Controller{
-		DB:        a.DB,
-		RedisConn: a.RedisConn,
-		Tracer:    tr,
+		DB:              a.DB,
+		RedisConn:       a.RedisConn,
+		Tracer:          tr,
+		ClinicLocation:  loc,
+		SlotDuration:    time.Duration(slotMinutes) * time.Minute,
+		MinimumLeadTime: time.Duration(leadMinutes) * time.Minute,
 	}
 
 	a.E = echo.New()
@@ -58,6 +82,8 @@ func (a *App) GetHealth(c echo.Context) error {
 
 // setRouters registers the business endpoints. Populated in Phase 4.
 func (a *App) setRouters() {
+	a.E.GET("/doctors/:id/availability", a.Controller.GetDoctorAvailability)
+	a.E.POST("/appointments", a.Controller.BookAppointment)
 }
 
 // Run starts the HTTP server.

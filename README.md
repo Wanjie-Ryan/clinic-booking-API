@@ -359,8 +359,10 @@ go run .                       # starts the HTTP server (SETUP_TYPE defaults to 
 
 `SETUP_TYPE=migrate` is a one-shot mode: it creates the database if it isn't already
 there, applies every pending migration, logs `migrations applied`, and exits — it never
-starts the HTTP server. That's deliberate: it's what Railway runs as the pre-deploy
-command before starting the real server container. More on this in §4.
+starts the HTTP server. It's a convenience for running migrations in isolation
+locally. In every other mode (including the normal server boot, `SETUP_TYPE=all`),
+`runMigrations` also runs automatically before the HTTP server starts — see D-14 for
+why. There's no separate migration step to remember to run before deploying.
 
 Confirm it's up:
 
@@ -383,7 +385,31 @@ _Added in Phase 4._
 
 ## 4. Deployment & CI/CD
 
-_Added in Phases 7–8._
+**Public URL:** `https://clinic-booking-api.up.railway.app` (exact domain as shown in
+the Railway dashboard — Settings → Networking).
+
+**Which branch deploys, and how:** `master` is both the branch GitHub Actions checks
+and the branch Railway watches. On every pull request into `master`, the GitHub
+Actions workflow (`.github/workflows/publish.yml`) checks out the code, sets up Go
+1.25, and runs `go build ./...` and `go vet ./...`. Railway's own GitHub integration
+watches `master` directly and rebuilds/redeploys on every push to it — but with
+**Wait for CI** enabled on the Railway service, it holds off starting that redeploy
+until the GitHub Actions run against that same commit has finished successfully. So
+merging a PR into `master` is what actually ships: GitHub Actions has to pass first,
+then Railway builds the Docker image and deploys it.
+
+**What the pipeline does *not* yet do:** run the test suite — there isn't one yet
+(Phase 6). Once tests exist, `publish.yml` gets a second job that runs `go test ./...`
+against MySQL and Redis service containers, and that becomes part of what has to pass
+before Railway will deploy.
+
+**Infrastructure:** Railway project with three services — the app (built from the
+repo's `Dockerfile`, not auto-detected buildpacks — see D-15), a managed MySQL
+instance, and a managed Redis instance, connected to the app via Railway's variable
+reference syntax (`${{MySQL.MYSQLHOST}}` etc.) rather than copy-pasted values, so
+credential rotation on Railway's side doesn't require touching the app's config.
+`/healthz` is wired in as Railway's own health check path, so a deploy that can't
+reach MySQL or Redis is held back rather than promoted to serve traffic.
 
 ---
 
@@ -413,4 +439,7 @@ rather than reconstructed at the end.
 | **D-10** | Dependencies (MySQL, Redis) run on non-default host ports 3307 and 6380. | So `docker compose up` cannot collide with a MySQL or Redis already running on the developer's machine. |
 | **D-11** | Redis runs with persistence disabled (`--save "" --appendonly no`). | Everything in it is a cache entry or a short-lived idempotency key. Nothing in Redis needs to survive a restart, and saying so in the container config documents that the data there is disposable. |
 | **D-12** | The request logging middleware logs method, path, status, latency and trace ID — never the request or response body. | A booking payload carries a patient's name, email and phone number. There is no operational reason for that to sit in application logs, so the body-capturing pattern I could have used elsewhere is deliberately not used here. |
-| **D-13** | Startup runs `CREATE DATABASE IF NOT EXISTS` using the same credentials the app connects with, rather than requiring a separate privileged migration user. | Verified directly: against a database that doesn't exist yet and a scoped user, MySQL correctly refuses this with an access-denied error — but against a database that already exists (which is guaranteed here, since `docker-compose.yml` provisions it via `MYSQL_DATABASE` and Railway's MySQL plugin does the same), the statement is a no-op and succeeds even for a non-privileged user. That's the actual deployment shape in both environments, so no separate admin credential is needed. |
+| **D-13** | Startup runs `CREATE DATABASE IF NOT EXISTS` using the same credentials the app connects with, rather than requiring a separate privileged migration user. | Verified directly, in both environments: locally, `docker-compose.yml` provisions the `clinic` database via `MYSQL_DATABASE` and the app's scoped `clinic` user already has rights on it, so the statement is a same-name no-op. On Railway, the app deliberately uses a different database name (`clinic`) than the one Railway's MySQL plugin auto-provisions (`railway` — see D-15's neighbour), and it works there because Railway's own MySQL user is `root` with full instance privileges, so `CREATE DATABASE` genuinely creates it the first time. Either way, no separate admin-only credential needs to be managed. |
+| **D-14** | Migrations run automatically at the start of every normal application boot (`SETUP_TYPE=all`), not only via a separate one-off `SETUP_TYPE=migrate` invocation. | Originally this ran only as Railway's "Pre-Deploy Command" — a separate process Railway executes before starting the real container. In practice this failed consistently and silently (no log output, ~2-6s) every time it invoked the compiled binary, while the exact same binary and code succeeded immediately when run as part of the main container's own startup. The precise root cause sits inside Railway's pre-deploy execution environment and isn't independently verifiable from here, but the fix removes the dependency on that separate mechanism entirely rather than working around it. `golang-migrate` takes an advisory MySQL lock (`GET_LOCK`) before applying anything, so running it on every boot is safe even with multiple replicas starting concurrently — on any boot after the first, it's a cheap version-check no-op (`migrate.ErrNoChange`), not a re-run. |
+| **D-15** | The Dockerfile must be named exactly `Dockerfile` (capital D), and Railway's builder is pinned explicitly to Dockerfile rather than left on auto-detection. | Committing the file as `dockerfile` (lowercase) caused Railway to silently fall back to its own auto-buildpack (Railpack) instead of using the multi-stage build in this repo — the app still built and ran, just via a completely different, uncontrolled filesystem layout that didn't match this project's `WORKDIR`/`ENTRYPOINT` assumptions. Caught via the exact contents of Build Logs, not guessed. |
+| **D-16** | The deployed app connects to a database named `clinic`, distinct from `railway`, the name Railway's MySQL plugin provisions by default. | Cosmetic, not functional — the app doesn't care what the database is called, it only reads `DATABASE_NAME` from the environment. Done purely so the database name is identical across local dev and production, which is one less thing to explain in an interview. |
