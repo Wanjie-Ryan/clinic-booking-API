@@ -8,8 +8,22 @@ Built for the Savannah Informatics backend take-home assessment.
 
 **Stack:** Go 1.25 · Echo v4 · MySQL 8.0 · Redis 7 · Docker · Railway · GitHub Actions
 
-- Live URL: _filled in Section 4 (Phase 7/8)_
-- Repository: _filled in Section 4 (Phase 7/8)_
+- Live URL: https://clinic-booking-api.up.railway.app
+- Repository: https://github.com/Wanjie-Ryan/clinic-booking-API
+
+**Endpoints** (full request/response details, status codes, and validation order
+are in [§3 API notes](#3-api-notes); 5 doctors and 3 patients are pre-seeded, ids
+`1`-`5` and `1`-`3` respectively, so the `GET` examples below work as-is):
+
+- `GET https://clinic-booking-api.up.railway.app/healthz`
+- `GET https://clinic-booking-api.up.railway.app/doctors/1/availability?date=2026-08-31`
+- `POST https://clinic-booking-api.up.railway.app/appointments`
+- `PATCH https://clinic-booking-api.up.railway.app/appointments/{id}/cancel`
+- `PATCH https://clinic-booking-api.up.railway.app/appointments/{id}/reschedule`
+- `GET https://clinic-booking-api.up.railway.app/patients/1/appointments`
+
+`{id}` in the two `PATCH` routes is an appointment id — book one via `POST
+/appointments` first (the response includes its `id`), then use that.
 
 ---
 
