@@ -12,6 +12,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	migratemysql "github.com/golang-migrate/migrate/v4/database/mysql"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/joho/godotenv"
 	"github.com/sirupsen/logrus"
 	"github.com/uptrace/opentelemetry-go-extra/otellogrus"
 	"github.com/uptrace/uptrace-go/uptrace"
@@ -36,6 +37,9 @@ func logsInit() {
 func main() {
 	logsInit()
 
+	if err := godotenv.Load(); err != nil {
+		log.Println("no .env file found, relying on real environment variables")
+	}
 	setup := os.Getenv("SETUP_TYPE")
 	if setup == "" {
 		setup = "all"

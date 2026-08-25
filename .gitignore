@@ -1,3 +1,4 @@
 .env
 vendor/
 *.log
+e2e_test.sh
