@@ -359,8 +359,10 @@ go run .                       # starts the HTTP server (SETUP_TYPE defaults to 
 
 `SETUP_TYPE=migrate` is a one-shot mode: it creates the database if it isn't already
 there, applies every pending migration, logs `migrations applied`, and exits — it never
-starts the HTTP server. That's deliberate: it's what Railway runs as the pre-deploy
-command before starting the real server container. More on this in §4.
+starts the HTTP server. It's a convenience for running migrations in isolation
+locally. In every other mode (including the normal server boot, `SETUP_TYPE=all`),
+`runMigrations` also runs automatically before the HTTP server starts — see D-14 for
+why. There's no separate migration step to remember to run before deploying.
 
 Confirm it's up:
 
@@ -371,25 +373,229 @@ curl http://localhost:8080/healthz
 
 ### Run the tests
 
-_Added in Phase 6._
+Two kinds of tests exist, and they need different things running.
+
+**Pure logic tests** (`app/library/*_test.go`) — slot generation and booking
+validation. No database, no network. Run on their own:
+
+```bash
+go test ./app/library/... -v
+```
+
+**Integration tests** (`app/controllers/appointments_test.go`) — exercise the actual
+HTTP handlers against a real MySQL and Redis, because the thing being tested (the
+double-booking guard) is a MySQL unique-constraint behaviour that a mock database
+cannot reproduce. They need the same environment as `go run .`:
+
+```bash
+docker compose up -d
+set -a; source .env; set +a
+go test ./... -v
+```
+
+If `DATABASE_HOST` isn't set, the integration tests skip themselves with a clear
+message rather than failing — so `go test ./...` is always safe to run, even without
+the containers up; it just won't exercise the concurrency guard in that case.
+
+The one worth reading is `TestBookAppointment_ConcurrentBookingsOnlyOneSucceeds`: it
+fires 10 concurrent goroutines at the exact same doctor+slot and asserts exactly one
+gets `201` and the other nine get `409` — the test the assessment explicitly asks
+for, proving the database constraint (not just the application's courtesy check)
+is what actually prevents double-booking under real concurrency.
 
 ---
 
 ## 3. API notes
 
-_Added in Phase 4._
+All request/response bodies are JSON. All timestamps are RFC3339 with an explicit
+offset (e.g. `2026-08-31T09:00:00+03:00`) — never a bare timestamp a client would
+have to guess the timezone of.
+
+### `GET /doctors/{id}/availability?date=YYYY-MM-DD`
+
+Returns every free slot for a doctor on a given date, soonest first, as an array of
+RFC3339 timestamps (converted to UTC in the response — the request's `date` is
+interpreted in the clinic's local timezone, `CLINIC_TIMEZONE`).
+
+| Situation | Status | Notes |
+| --- | --- | --- |
+| Success | `200` | `{"doctor_id":1,"date":"2026-08-31","available_slots":[...]}` |
+| Doctor has no working hours that day | `200` | `available_slots` is `[]`, not an error — a doctor simply not working a given day is a valid, expected answer |
+| `date` missing or malformed | `400` | must be `YYYY-MM-DD` |
+| `id` not a positive integer | `400` | |
+| Doctor doesn't exist | `404` | |
+
+Cached for 60s per doctor+date (README §1.5); invalidated immediately after any
+booking, cancellation, or reschedule affecting that doctor+date.
+
+### `POST /appointments`
+
+Books a slot. Optional `Idempotency-Key` header makes retries safe (README §1.5,
+D-18).
+
+Request:
+```json
+{"doctor_id": 1, "patient_id": 1, "start_time": "2026-08-31T09:00:00+03:00"}
+```
+
+**Validation order** (the first failure is what the caller sees — README §1.7):
+
+1. Body well-formed, `doctor_id`/`patient_id` positive, `start_time` parses as
+   RFC3339 → `400`
+2. Doctor exists → `404`
+3. Patient exists → `404`
+4. Not in the past → `400`
+5. At least `BOOKING_MINIMUM_LEAD_MINUTES` from now → `400`
+6. Aligned to the doctor's slot grid and inside a working-hour range → `400`
+7. Not already booked (courtesy check, then the authoritative database constraint) →
+   `409`
+
+Success returns `201` with the created appointment. A slot lost to a race between
+the courtesy check and the insert also returns `409`, with a different message
+(`"slot was just taken"` vs. `"slot is already booked"`) so the two paths are
+distinguishable in logs even though the HTTP contract is identical.
+
+### `PATCH /appointments/{id}/cancel`
+
+Request: `{"reason": "patient requested cancellation"}` — `reason` is required.
+
+| Situation | Status |
+| --- | --- |
+| Success | `200`, returns the appointment with `status: "cancelled"` |
+| Missing/blank `reason` | `400` |
+| Appointment doesn't exist | `404` |
+| Already cancelled | `409` |
+
+The freed slot is bookable again immediately — cancelling sets `active_slot_key` to
+`NULL` via the generated column (README §1.3), no separate cleanup step.
+
+### `PATCH /appointments/{id}/reschedule`
+
+Request: `{"start_time": "2026-09-01T10:00:00+03:00"}` — validated exactly like a
+fresh `POST /appointments` (same 7-step order above, steps 4-6, since doctor/patient
+are already known from the existing appointment).
+
+| Situation | Status |
+| --- | --- |
+| Success | `200` — **note: the response `id` is a new appointment ID**, not the one in the URL (D-20: reschedule cancels the old row and inserts a new one, preserving full history) |
+| New `start_time` invalid | `400` |
+| Appointment doesn't exist | `404` |
+| Appointment already cancelled | `409` |
+| New slot already taken | `409` — the original appointment is left untouched (transactional, README §1.3/D-05) |
+
+### `GET /patients/{id}/appointments` (bonus)
+
+Returns a patient's upcoming (`status = 'booked'`, `start_time` in the future)
+appointments, soonest first. Deliberately uncached (README D-06) — a patient who
+just cancelled and reloads must see that reflected immediately.
+
+| Situation | Status |
+| --- | --- |
+| Success | `200`, array (possibly empty) of appointments |
+| Patient doesn't exist | `404` |
+
+### Decisions where the spec was ambiguous, called out per-endpoint
+
+- **How does a patient come to exist?** The scenario describes patients booking
+  against existing clinic records, not self-registering — there's no
+  `POST /patients`. Three patients are seeded via migration (`6_seed_patients`,
+  same pattern as the doctor seed) so the deployed API is bookable end-to-end
+  without direct database access.
+- **Reschedule's response ID** — see above; flagged here because it's the one place
+  a client might reasonably expect the URL's `:id` and the response's `id` to match,
+  and they deliberately don't.
+- **Idempotency key scope** — matched by header value alone, not by also checking
+  the request body matches (D-18).
 
 ---
 
 ## 4. Deployment & CI/CD
 
-_Added in Phases 7–8._
+**Public URL:** `https://clinic-booking-api.up.railway.app` (exact domain as shown in
+the Railway dashboard — Settings → Networking).
+
+**Which branch deploys, and how:** `master` is both the branch GitHub Actions checks
+and the branch Railway watches. On every pull request into `master`, the GitHub
+Actions workflow (`.github/workflows/publish.yml`) runs two jobs in sequence:
+
+1. **Build and vet** — checks out the code, sets up Go 1.25, `go build ./...`,
+   `go vet ./...`.
+2. **Test** — spins up MySQL 8.0 and Redis 7 as service containers, applies every
+   migration against the MySQL container (`SETUP_TYPE=migrate go run .` — the exact
+   same code path production uses to migrate itself, see D-14), then runs
+   `go test ./...`. This is what actually exercises
+   `TestBookAppointment_ConcurrentBookingsOnlyOneSucceeds` — the concurrency test
+   needs a real MySQL with the real unique constraint, which is exactly what the
+   service container provides.
+
+Railway's own GitHub integration watches `master` directly and rebuilds/redeploys on
+every push to it — but with **Wait for CI** enabled on the Railway service, it holds
+off starting that redeploy until both GitHub Actions jobs against that same commit
+have finished successfully. So merging a PR into `master` is what actually ships:
+build, vet, and the full test suite (including the concurrency guard) all have to
+pass first, then Railway builds the Docker image and deploys it.
+
+**Infrastructure:** Railway project with three services — the app (built from the
+repo's `Dockerfile`, not auto-detected buildpacks — see D-15), a managed MySQL
+instance, and a managed Redis instance, connected to the app via Railway's variable
+reference syntax (`${{MySQL.MYSQLHOST}}` etc.) rather than copy-pasted values, so
+credential rotation on Railway's side doesn't require touching the app's config.
+`/healthz` is wired in as Railway's own health check path, so a deploy that can't
+reach MySQL or Redis is held back rather than promoted to serve traffic.
 
 ---
 
 ## 5. AI reflection
 
-_Drafted in Phase 9 from the actual build log._
+> Drafted from the real build log of this project. I've reviewed and edited this
+> before submitting — it reflects what actually happened, not a generic answer.
+
+**1. What I used AI for across the four sections.** I used it as a design and
+implementation assistant, the way I'd use a pairing partner — never as the author.
+I worked through system-design trade-offs with it before deciding on an approach
+myself (weighing the double-booking guard against a `sync.Mutex`, a Redis lock, and
+`SELECT ... FOR UPDATE` before I settled on the MySQL unique-constraint approach,
+for the reasons in §1.3); I had it draft Go code, which I then typed into the
+project by hand myself, read line by line, and verified against a real local MySQL
+and Redis before accepting any of it into the codebase; I worked through an
+extended, genuinely difficult Railway deployment debugging session with it; I had
+it draft the CI/CD pipeline for me to review and adopt; and I used it to help draft
+this reflection from the real session log, which I've then edited myself.
+
+**2. One example where an AI suggestion genuinely improved the work.** I was stuck
+with a Railway deployment that kept failing at the "Pre-Deploy Command" step —
+silently, with zero log output, across several attempts, even after I'd fixed the
+Dockerfile issue and confirmed the database existed. I asked for help debugging why
+the command kept failing. Instead of continuing to chase the exact cause inside
+Railway's pre-deploy execution environment, the suggestion was to stop depending on
+that separate mechanism altogether and run migrations at the start of every normal
+app boot instead — since `golang-migrate` already takes an advisory lock, this is
+safe even with multiple replicas, and it removes an entire moving part from the
+deploy pipeline rather than working around it. I adopted that approach, wrote it in
+myself, and it worked on the first try — it's architecturally better than what I'd
+been trying to debug, not just a patch.
+
+**3. One example where AI output was wrong and how I caught it.** While building
+the cancel endpoint, an early draft of the handler fetched an appointment's
+`doctor_id`, `patient_id`, and `status` to cancel it, but never selected
+`start_time` or `end_time` — so the response for a successful cancellation
+silently returned blank strings for both fields. It compiled fine and passed
+`go vet`, since Go doesn't flag an unset string field. I only caught it because I
+ran the actual endpoint against real data myself and read the JSON response,
+rather than trusting that the code looked right — `{"start_time":"","end_time":"",...}`
+was obviously wrong the moment I saw it. That's why I made a point of testing every
+endpoint against a live database myself before accepting any code into the
+project, rather than just checking that it compiled.
+
+**4. Two decisions I made without AI, and why I trusted my own judgment.**
+- **Sticking to a single `.env` file with no `.env.example`.** A small workflow
+  preference, but mine — I didn't want two files that could drift out of sync, and
+  I was confident that trade-off (a `.env.example` would be gitignored-safer for a
+  team, but this is a solo assessment) was fine for this project's scope.
+- **Whether to pay for Railway's Hobby plan after the trial expired.** This was
+  explicitly left to me — spending real money isn't something I wanted decided for
+  me, and $5/month against the stakes of this assessment was an easy call once I
+  weighed it myself.
 
 ---
 
@@ -413,4 +619,11 @@ rather than reconstructed at the end.
 | **D-10** | Dependencies (MySQL, Redis) run on non-default host ports 3307 and 6380. | So `docker compose up` cannot collide with a MySQL or Redis already running on the developer's machine. |
 | **D-11** | Redis runs with persistence disabled (`--save "" --appendonly no`). | Everything in it is a cache entry or a short-lived idempotency key. Nothing in Redis needs to survive a restart, and saying so in the container config documents that the data there is disposable. |
 | **D-12** | The request logging middleware logs method, path, status, latency and trace ID — never the request or response body. | A booking payload carries a patient's name, email and phone number. There is no operational reason for that to sit in application logs, so the body-capturing pattern I could have used elsewhere is deliberately not used here. |
-| **D-13** | Startup runs `CREATE DATABASE IF NOT EXISTS` using the same credentials the app connects with, rather than requiring a separate privileged migration user. | Verified directly: against a database that doesn't exist yet and a scoped user, MySQL correctly refuses this with an access-denied error — but against a database that already exists (which is guaranteed here, since `docker-compose.yml` provisions it via `MYSQL_DATABASE` and Railway's MySQL plugin does the same), the statement is a no-op and succeeds even for a non-privileged user. That's the actual deployment shape in both environments, so no separate admin credential is needed. |
+| **D-13** | Startup runs `CREATE DATABASE IF NOT EXISTS` using the same credentials the app connects with, rather than requiring a separate privileged migration user. | Verified directly, in both environments: locally, `docker-compose.yml` provisions the `clinic` database via `MYSQL_DATABASE` and the app's scoped `clinic` user already has rights on it, so the statement is a same-name no-op. On Railway, the app deliberately uses a different database name (`clinic`) than the one Railway's MySQL plugin auto-provisions (`railway` — see D-15's neighbour), and it works there because Railway's own MySQL user is `root` with full instance privileges, so `CREATE DATABASE` genuinely creates it the first time. Either way, no separate admin-only credential needs to be managed. |
+| **D-14** | Migrations run automatically at the start of every normal application boot (`SETUP_TYPE=all`), not only via a separate one-off `SETUP_TYPE=migrate` invocation. | Originally this ran only as Railway's "Pre-Deploy Command" — a separate process Railway executes before starting the real container. In practice this failed consistently and silently (no log output, ~2-6s) every time it invoked the compiled binary, while the exact same binary and code succeeded immediately when run as part of the main container's own startup. The precise root cause sits inside Railway's pre-deploy execution environment and isn't independently verifiable from here, but the fix removes the dependency on that separate mechanism entirely rather than working around it. `golang-migrate` takes an advisory MySQL lock (`GET_LOCK`) before applying anything, so running it on every boot is safe even with multiple replicas starting concurrently — on any boot after the first, it's a cheap version-check no-op (`migrate.ErrNoChange`), not a re-run. |
+| **D-15** | The Dockerfile must be named exactly `Dockerfile` (capital D), and Railway's builder is pinned explicitly to Dockerfile rather than left on auto-detection. | Committing the file as `dockerfile` (lowercase) caused Railway to silently fall back to its own auto-buildpack (Railpack) instead of using the multi-stage build in this repo — the app still built and ran, just via a completely different, uncontrolled filesystem layout that didn't match this project's `WORKDIR`/`ENTRYPOINT` assumptions. Caught via the exact contents of Build Logs, not guessed. |
+| **D-16** | The deployed app connects to a database named `clinic`, distinct from `railway`, the name Railway's MySQL plugin provisions by default. | Cosmetic, not functional — the app doesn't care what the database is called, it only reads `DATABASE_NAME` from the environment. Done purely so the database name is identical across local dev and production, which is one less thing to explain in an interview. |
+| **D-17** | Rescheduling invalidates the availability cache for *both* the old slot's date and the new slot's date, not just one. | The two can be different calendar dates (rescheduling from one day to another), and each date is cached under its own key (`availability:{doctor_id}:{date}`). Invalidating only the new date would leave the old date's cache showing a slot as taken that's actually free again. |
+| **D-18** | An `Idempotency-Key` is authoritative on its own — a replay is matched purely by the header value, not by re-checking that the request body matches what was sent the first time. | This is the same interpretation major payment APIs (Stripe, etc.) use: the key, not the body, is the source of truth for "have I seen this request before." The trade-off is explicit: a client that reuses a key with a genuinely different body gets back the *original* booking, not an error about a mismatch. That's the correct behavior for the case idempotency keys exist for (a client retrying its own timed-out request with an unchanged body) and an accepted edge case for a client that reuses a key incorrectly — the latter is a client bug, not something the server can distinguish from a legitimate retry without adding a body-hash check the assessment doesn't ask for. |
+| **D-19** | There is no `POST /patients`. Three patients are seeded via migration `6_seed_patients`, the same pattern used for the doctor seed. | The scenario describes patients booking against existing clinic records; nothing in the brief asks for patient self-registration, and adding it would be scope the assessment doesn't call for — the same reasoning as D-09 for doctors. Without some patient rows existing, though, the deployed API would be unbookable by anyone without direct database access, so seeding a few is the minimal fix that keeps the API actually usable end-to-end. |
+| **D-20** | `PATCH /appointments/{id}/reschedule` returns an appointment with a *different* ID than the one in the URL. | Consequence of D-05/D-04: reschedule cancels the original row and inserts a new one rather than updating `start_time` in place, so the full booking history survives (every slot an appointment ever held is its own row, with its own cancellation reason if superseded). The trade-off is explicit here because it's the one place a client might reasonably assume the URL's `:id` and the response's `id` match, and they deliberately don't — documented in the API notes (§3) precisely because it's non-obvious. |
