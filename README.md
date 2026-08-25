@@ -342,6 +342,58 @@ Explicitly out of scope for this assessment, but these are the seams I left:
 - Go 1.25+
 - Docker and Docker Compose
 
+### Create your `.env`
+
+`.env` is gitignored — it's local config, not something to commit, even though
+every value in it is a harmless local Docker Compose credential (production config
+lives entirely separately, in Railway's own dashboard). Create `.env` in the repo
+root yourself with this content:
+
+```bash
+ENV=dev
+SETUP_TYPE=all
+DEPLOYMENT_NAME=clinic-booking
+SYSTEM_HOST=0.0.0.0
+SYSTEM_PORT=8080
+
+# MySQL
+DATABASE_HOST=127.0.0.1
+DATABASE_PORT=3307
+DATABASE_USERNAME=clinic
+DATABASE_PASSWORD=clinic
+DATABASE_NAME=clinic
+DATABASE_IDLE_CONNECTION=10
+DATABASE_MAX_CONNECTION=50
+DATABASE_CONNECTION_LIFETIME=300
+
+# Redis
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6380
+REDIS_DATABASE_NUMBER=0
+REDIS_PASSWORD=
+REDIS_KEY_PREFIX=clinic
+
+# Clinic domain
+# appointments are stored in UTC.
+CLINIC_TIMEZONE=Africa/Nairobi
+SLOT_DURATION_MINUTES=30
+BOOKING_MINIMUM_LEAD_MINUTES=60
+AVAILABILITY_CACHE_TTL_SECONDS=60
+IDEMPOTENCY_KEY_TTL_SECONDS=86400
+
+# HTTP middleware
+CORS_ALLOWED_ORIGINS=*
+API_TIMEOUT_IN_SECONDS=30
+RATE_LIMIT_RATE=20
+RATE_LIMIT_BURST=5
+RATE_LIMIT_INTERVAL=5
+
+# Observability
+# Leave empty to run without a tracing backend -- OTel degrades to a no-op tracer
+# rather than failing startup.
+UPTRACE_DSN=
+```
+
 ### Start the dependencies
 
 ```bash
