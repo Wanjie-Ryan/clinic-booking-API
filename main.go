@@ -52,8 +52,6 @@ func main() {
 
 	ctx := context.Background()
 
-	// Degrades to a no-op tracer automatically when UPTRACE_DSN is empty or
-	// invalid -- confirmed against the SDK source, not assumed.
 	uptrace.ConfigureOpentelemetry(
 		uptrace.WithDSN(os.Getenv("UPTRACE_DSN")),
 		uptrace.WithServiceName("clinic-booking-api"),
