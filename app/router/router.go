@@ -53,13 +53,25 @@ func (a *App) Initialize(tr trace.Tracer, ctx context.Context) {
 		leadMinutes = 60
 	}
 
+	availabilityCacheSeconds, err := strconv.Atoi(os.Getenv("AVAILABILITY_CACHE_TTL_SECONDS"))
+	if err != nil || availabilityCacheSeconds <= 0 {
+		availabilityCacheSeconds = 60
+	}
+
+	idempotencyKeySeconds, err := strconv.Atoi(os.Getenv("IDEMPOTENCY_KEY_TTL_SECONDS"))
+	if err != nil || idempotencyKeySeconds <= 0 {
+		idempotencyKeySeconds = 86400
+	}
+
 	a.Controller = &controllers.Controller{
-		DB:              a.DB,
-		RedisConn:       a.RedisConn,
-		Tracer:          tr,
-		ClinicLocation:  loc,
-		SlotDuration:    time.Duration(slotMinutes) * time.Minute,
-		MinimumLeadTime: time.Duration(leadMinutes) * time.Minute,
+		DB:                   a.DB,
+		RedisConn:            a.RedisConn,
+		Tracer:               tr,
+		ClinicLocation:       loc,
+		SlotDuration:         time.Duration(slotMinutes) * time.Minute,
+		MinimumLeadTime:      time.Duration(leadMinutes) * time.Minute,
+		AvailabilityCacheTTL: time.Duration(availabilityCacheSeconds) * time.Second,
+		IdempotencyKeyTTL:    time.Duration(idempotencyKeySeconds) * time.Second,
 	}
 
 	a.E = echo.New()
@@ -84,6 +96,9 @@ func (a *App) GetHealth(c echo.Context) error {
 func (a *App) setRouters() {
 	a.E.GET("/doctors/:id/availability", a.Controller.GetDoctorAvailability)
 	a.E.POST("/appointments", a.Controller.BookAppointment)
+	a.E.PATCH("/appointments/:id/cancel", a.Controller.CancelAppointment)
+	a.E.PATCH("/appointments/:id/reschedule", a.Controller.RescheduleAppointment)
+	a.E.GET("/patients/:id/appointments", a.Controller.GetPatientAppointments)
 }
 
 // Run starts the HTTP server.

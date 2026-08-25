@@ -2,12 +2,14 @@ package controllers
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/codes"
 
@@ -49,6 +51,23 @@ func (controller *Controller) GetDoctorAvailability(c echo.Context) error {
 			ErrorCode:    http.StatusBadRequest,
 			ErrorMessage: "invalid date, expected format YYYY-MM-DD",
 		})
+	}
+
+	cacheKey := availabilityCacheKey(doctorID, dateParam)
+	cached, err := library.GetRedisKey(ctx, controller.RedisConn, cacheKey)
+	if err == nil {
+		var cachedResponse models.AvailabilityResponse
+		if jsonErr := json.Unmarshal([]byte(cached), &cachedResponse); jsonErr == nil {
+			return library.RespondRaw(c, http.StatusOK, cachedResponse)
+		}
+	} else if !errors.Is(err, redis.Nil) {
+		// Redis being unreachable should degrade to computing the answer
+		// normally, not fail the request -- the cache is an optimisation, not
+		// a dependency.
+		logrus.WithContext(ctx).WithFields(logrus.Fields{
+			constants.DESCRIPTION: "error reading availability cache",
+			constants.DATA:        cacheKey,
+		}).Warn(err.Error())
 	}
 
 	var doctorName string
@@ -113,11 +132,13 @@ func (controller *Controller) GetDoctorAvailability(c echo.Context) error {
 	// No working-hour rows for this weekday means the doctor simply doesn't work
 	// that day -- an empty slot list, not an error.
 	if len(ranges) == 0 {
-		return library.RespondRaw(c, http.StatusOK, models.AvailabilityResponse{
+		response := models.AvailabilityResponse{
 			DoctorID: doctorID,
 			Date:     dateParam,
 			Slots:    []string{},
-		})
+		}
+		controller.cacheAvailability(ctx, cacheKey, response)
+		return library.RespondRaw(c, http.StatusOK, response)
 	}
 
 	candidates, err := library.GenerateSlots(ranges, date, controller.ClinicLocation, controller.SlotDuration)
@@ -177,9 +198,11 @@ func (controller *Controller) GetDoctorAvailability(c echo.Context) error {
 		slots = append(slots, s.Format(time.RFC3339))
 	}
 
-	return library.RespondRaw(c, http.StatusOK, models.AvailabilityResponse{
+	response := models.AvailabilityResponse{
 		DoctorID: doctorID,
 		Date:     dateParam,
 		Slots:    slots,
-	})
+	}
+	controller.cacheAvailability(ctx, cacheKey, response)
+	return library.RespondRaw(c, http.StatusOK, response)
 }

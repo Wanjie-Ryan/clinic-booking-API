@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/codes"
 
@@ -26,6 +28,26 @@ func (controller *Controller) BookAppointment(c echo.Context) error {
 	defer func() {
 		library.Histogram(ctx, "book_appointment.duration", "how long it takes to book an appointment", startTime)
 	}()
+
+	// If the client supplied an idempotency key and we've already processed a
+	// booking under it, return that exact result instead of re-processing --
+	// this makes retries (e.g. a client that times out waiting for a response
+	// and resends the same POST) safe against creating a duplicate booking.
+	idempotencyKey := c.Request().Header.Get("Idempotency-Key")
+	if idempotencyKey != "" {
+		cached, err := library.GetRedisKey(ctx, controller.RedisConn, idempotencyCacheKey(idempotencyKey))
+		if err == nil {
+			var cachedResponse models.AppointmentResponse
+			if jsonErr := json.Unmarshal([]byte(cached), &cachedResponse); jsonErr == nil {
+				return library.RespondRaw(c, http.StatusCreated, cachedResponse)
+			}
+		} else if !errors.Is(err, redis.Nil) {
+			logrus.WithContext(ctx).WithFields(logrus.Fields{
+				constants.DESCRIPTION: "error reading idempotency key",
+				constants.DATA:        idempotencyKey,
+			}).Warn(err.Error())
+		}
+	}
 
 	req := new(models.BookAppointmentRequest)
 	if err := c.Bind(req); err != nil {
@@ -213,14 +235,38 @@ func (controller *Controller) BookAppointment(c echo.Context) error {
 		})
 	}
 
-	return library.RespondRaw(c, http.StatusCreated, models.AppointmentResponse{
+	// Cache invalidation happens after the write has committed, never before
+	// (README section 1.5) -- a failure here is logged, not returned, since
+	// the booking already succeeded and the cache will simply go stale until
+	// its TTL expires.
+	controller.invalidateAvailabilityCache(ctx, req.DoctorID, start.UTC())
+
+	response := models.AppointmentResponse{
 		ID:        id,
 		DoctorID:  req.DoctorID,
 		PatientID: req.PatientID,
 		StartTime: start.UTC().Format(time.RFC3339),
 		EndTime:   end.UTC().Format(time.RFC3339),
 		Status:    constants.StatusBooked,
-	})
+	}
+
+	// Store the idempotency result after the successful write, not before --
+	// storing it earlier could cache a result for a booking that then failed.
+	if idempotencyKey != "" {
+		if payload, err := json.Marshal(response); err != nil {
+			logrus.WithContext(ctx).WithFields(logrus.Fields{
+				constants.DESCRIPTION: "error marshalling idempotency response",
+				constants.DATA:        idempotencyKey,
+			}).Error(err.Error())
+		} else if err := library.SetRedisKeyWithExpiry(ctx, controller.RedisConn, idempotencyCacheKey(idempotencyKey), string(payload), controller.IdempotencyKeyTTL); err != nil {
+			logrus.WithContext(ctx).WithFields(logrus.Fields{
+				constants.DESCRIPTION: "error storing idempotency key",
+				constants.DATA:        idempotencyKey,
+			}).Error(err.Error())
+		}
+	}
+
+	return library.RespondRaw(c, http.StatusCreated, response)
 }
 
 // validationMessage translates a library.ErrSlot* sentinel into the message returned

@@ -18,3 +18,14 @@ type AppointmentResponse struct {
 	Status             string  `json:"status"`
 	CancellationReason *string `json:"cancellation_reason,omitempty"`
 }
+
+// CancelAppointmentRequest is the payload for PATCH /appointments/{id}/cancel.
+type CancelAppointmentRequest struct {
+	Reason string `json:"reason"`
+}
+
+// RescheduleAppointmentRequest is the payload for
+// PATCH /appointments/{id}/reschedule.
+type RescheduleAppointmentRequest struct {
+	StartTime string `json:"start_time"`
+}

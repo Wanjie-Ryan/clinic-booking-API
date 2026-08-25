@@ -19,4 +19,12 @@ type Controller struct {
 	SlotDuration time.Duration
 	// MinimumLeadTime is how far in advance a booking must start from now
 	MinimumLeadTime time.Duration
+
+	// AvailabilityCacheTTL is how long a computed availability response is
+	// cached for (README section 1.5).
+	AvailabilityCacheTTL time.Duration
+
+	// IdempotencyKeyTTL is how long a POST /appointments Idempotency-Key stays
+	// valid for (README section 1.5).
+	IdempotencyKeyTTL time.Duration
 }
