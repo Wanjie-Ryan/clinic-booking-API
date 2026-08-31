@@ -35,6 +35,7 @@ func (a *App) Initialize(tr trace.Tracer, ctx context.Context) {
 	a.DB = database.DbInstance()
 	a.RedisConn = database.RedisClient()
 
+	// necessary cause Rails servers are not in kenya, so if I were to use the servers local time, instead of converting the code would be returning wrong answers silently
 	loc, err := time.LoadLocation(os.Getenv("CLINIC_TIMEZONE"))
 	if err != nil {
 		logrus.WithContext(ctx).WithFields(logrus.Fields{
@@ -48,21 +49,26 @@ func (a *App) Initialize(tr trace.Tracer, ctx context.Context) {
 		slotMinutes = 30
 	}
 
+	// patient can't book sth starting less than 60 minutes from now.
+	// enforced on both write path (validateslot - rejects it) and readPath (availableslots - filters it out of whats even offered), nothing inconsistent slips through.
 	leadMinutes, err := strconv.Atoi(os.Getenv("BOOKING_MINIMUM_LEAD_MINUTES"))
 	if err != nil || leadMinutes < 0 {
 		leadMinutes = 60
 	}
 
+	// computed slot list sits in Redis for 60s before being stale
 	availabilityCacheSeconds, err := strconv.Atoi(os.Getenv("AVAILABILITY_CACHE_TTL_SECONDS"))
 	if err != nil || availabilityCacheSeconds <= 0 {
 		availabilityCacheSeconds = 60
 	}
 
+	// how long retry keys stays valid for replay protection
 	idempotencyKeySeconds, err := strconv.Atoi(os.Getenv("IDEMPOTENCY_KEY_TTL_SECONDS"))
 	if err != nil || idempotencyKeySeconds <= 0 {
 		idempotencyKeySeconds = 86400
 	}
 
+	// every other file downstream gets to read from this, they can't modify or access the env themselves.
 	a.Controller = &controllers.Controller{
 		DB:                   a.DB,
 		RedisConn:            a.RedisConn,

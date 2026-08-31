@@ -34,6 +34,10 @@ func (controller *Controller) GetPatientAppointments(c echo.Context) error {
 		})
 	}
 
+	// below is an example of a subquery - nested queries
+	// select exist is outer query while select 1 is inner query
+	// select 1 means just hand back number 1 in case the row with the id exists, it only cares about the row existing, not row content.
+	// exists collapses whatever the result is to a simple boolean, yes or no
 	var patientExists bool
 	err = controller.DB.QueryRowContext(ctx,
 		"SELECT EXISTS(SELECT 1 FROM patients WHERE id = ?)", patientID).Scan(&patientExists)
@@ -62,6 +66,7 @@ func (controller *Controller) GetPatientAppointments(c echo.Context) error {
 		 WHERE patient_id = ? AND status = ? AND start_time >= ?
 		 ORDER BY start_time ASC`,
 		patientID, constants.StatusBooked, time.Now().UTC())
+	// time.Now().UTC() gives a full instant - year, month, day, hour, minute, second, all fused into one value.
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		span.RecordError(err)
@@ -92,6 +97,7 @@ func (controller *Controller) GetPatientAppointments(c echo.Context) error {
 			ID:        id,
 			DoctorID:  doctorID,
 			PatientID: patientID,
+			// start.UTC is just a defensive code mechanism, .Format just converts time into string, cause Json has no native way of dealing with date type
 			StartTime: start.UTC().Format(time.RFC3339),
 			EndTime:   end.UTC().Format(time.RFC3339),
 			Status:    constants.StatusBooked,

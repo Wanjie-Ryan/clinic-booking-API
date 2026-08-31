@@ -82,6 +82,8 @@ func (controller *Controller) CancelAppointment(c echo.Context) error {
 	// if two cancel requests race, only the first UPDATE affects a row: the
 	// second one matches zero rows because status is no longer 'booked' by the
 	// time it runs, and RowsAffected tells us that without a second read.
+	// MySQl processes each individual UPDATE statement atomically. If 2 update requests come in at the same exact microsecond, MySQL can only execute one UPDATE at a time against that specific row
+	// let the database's own atomicity do the mutual exclusion, don't try to engineer it in application code
 	result, err := controller.DB.ExecContext(ctx,
 		`UPDATE appointments SET status = ?, cancellation_reason = ? WHERE id = ? AND status = ?`,
 		constants.StatusCancelled, req.Reason, appointmentID, constants.StatusBooked)
@@ -190,6 +192,7 @@ func (controller *Controller) RescheduleAppointment(c echo.Context) error {
 	// transaction, so a second reschedule/cancel request against the same
 	// appointment ID blocks until this one commits or rolls back -- it can't
 	// see a stale 'booked' status and race the UPDATE below.
+	// the FOR UPDATE is a lock, it tells MySQL that these rows are now locked for the rest of my transaction - no other transaction can modify or lock this same row until I COMMIT or ROLLBACK
 	var doctorID, patientID int64
 	var status string
 	var oldStart time.Time
@@ -275,6 +278,11 @@ func (controller *Controller) RescheduleAppointment(c echo.Context) error {
 		})
 	}
 
+	// 1. select for update from appointments to check if appointment is present
+	// 2. check the doctors working hours if available from the start_time provided by patient
+	// 3. Update the appointments table by freeing up the slot to cancelled, so as to remove the active_slot_key which is generated when status is booked
+	// 4. write to the appointments table
+
 	newEnd := newStart.Add(controller.SlotDuration)
 
 	// Write 1: free the old slot.
@@ -306,6 +314,7 @@ func (controller *Controller) RescheduleAppointment(c echo.Context) error {
 	if err != nil {
 		tx.Rollback()
 
+		// if the active_slot_key is already taken or set, then return a duplicate error
 		var mysqlErr *mysql.MySQLError
 		if errors.As(err, &mysqlErr) && mysqlErr.Number == constants.MySQLDuplicateEntryErrorCode {
 			return library.RespondRaw(c, http.StatusConflict, models.ErrorResponse{
@@ -367,3 +376,8 @@ func (controller *Controller) RescheduleAppointment(c echo.Context) error {
 		Status:    constants.StatusBooked,
 	})
 }
+
+// the function RescheduleAppointment needs a transaction cause the function does 2 separate writes; free the old slot (UPDATE), then claim the new slot (INSERT) and both have to suceeed together or not happen at all.
+// Picture the failure mode without a transaction; the UPDATE cancels the old appointment successfully, then the INSERT fails (the new slot got taken a second earlier by someone else). Without a transaction, you'd be left with a patient who has no appointment at all. Their old one is gone, and the new one never landed.
+// Transaction guarantees that both writes happen or neither does, restoring the original appointment exactly as it was.
+// A transaction itself DOES NOT lock, it just ensures that these events happen together as one (Atomic)

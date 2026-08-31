@@ -33,6 +33,7 @@ func (controller *Controller) BookAppointment(c echo.Context) error {
 	// booking under it, return that exact result instead of re-processing --
 	// this makes retries (e.g. a client that times out waiting for a response
 	// and resends the same POST) safe against creating a duplicate booking.
+	// idempotency might feel optional until the first double booking
 	idempotencyKey := c.Request().Header.Get("Idempotency-Key")
 	if idempotencyKey != "" {
 		cached, err := library.GetRedisKey(ctx, controller.RedisConn, idempotencyCacheKey(idempotencyKey))
@@ -116,6 +117,7 @@ func (controller *Controller) BookAppointment(c echo.Context) error {
 		})
 	}
 
+	// trying to find out when or which day of the week the patient has booked 0 being sunday and 6 being saturday
 	weekday := int(start.In(controller.ClinicLocation).Weekday())
 
 	rows, err := controller.DB.QueryContext(ctx,
@@ -152,6 +154,8 @@ func (controller *Controller) BookAppointment(c echo.Context) error {
 	}
 	rows.Close()
 
+	// start is patient start_time - say 10Am
+	// ranges are from the DB and they come on in as [{s,e}, {s,e}] [{08:00 - 13:00}, {14:00 - 17:00}]
 	if err := library.ValidateSlot(start, ranges, controller.ClinicLocation, controller.SlotDuration, controller.MinimumLeadTime, time.Now()); err != nil {
 		return library.RespondRaw(c, http.StatusBadRequest, models.ErrorResponse{
 			ErrorCode:    http.StatusBadRequest,
@@ -159,6 +163,7 @@ func (controller *Controller) BookAppointment(c echo.Context) error {
 		})
 	}
 
+	// we adding 30 minutes to find the end_time for that specific booking
 	end := start.Add(controller.SlotDuration)
 
 	// Courtesy check: cheap, common-case 409 without needing to provoke a MySQL
@@ -252,6 +257,8 @@ func (controller *Controller) BookAppointment(c echo.Context) error {
 
 	// Store the idempotency result after the successful write, not before --
 	// storing it earlier could cache a result for a booking that then failed.
+	// if the exact request gets sent twice, treat it as one.
+	// used where response is lost but write actually succeeded.
 	if idempotencyKey != "" {
 		if payload, err := json.Marshal(response); err != nil {
 			logrus.WithContext(ctx).WithFields(logrus.Fields{

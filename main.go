@@ -83,6 +83,7 @@ func main() {
 // (SETUP_TYPE=migrate) so schema changes land before the new app version
 // starts serving traffic.
 func runMigrations(ctx context.Context) {
+	// opens a MySQL connection without selecting a specific DB; ie. connects to the server itself, not to clinic.
 	dbWithoutName := database.DbInstanceWithoutDatabaseName()
 	defer dbWithoutName.Close()
 
@@ -93,6 +94,7 @@ func runMigrations(ctx context.Context) {
 		}).Fatal(err.Error())
 	}
 
+	// opens a second and separate connection, this time to the now existing clinic DB. This is the one migrations actually run against.
 	db := database.DbInstance()
 	defer db.Close()
 

@@ -33,6 +33,9 @@ func corsConfig() middleware.CORSConfig {
 }
 
 // rateLimiterConfig builds a per-IP in-memory rate limiter from RATE_LIMIT_*.
+// builds the too many requests bouncer, stops one client from hammering the API, protects against abuse and accidental storms
+// token bucket per IP IP address:: gets a bucket that holds upto BURST 5 tokens, and REFILLS at RATE 20 tokens/second
+// Empty bucket gets rejected with 429. IdentifierExtractor is what makes it per-ip, not global - it pulls c.RealIP so each client has their own independent bucket.
 func rateLimiterConfig() middleware.RateLimiterConfig {
 	rateVal, err := strconv.ParseFloat(os.Getenv("RATE_LIMIT_RATE"), 64)
 	if err != nil || rateVal == 0 {
@@ -70,6 +73,7 @@ func rateLimiterConfig() middleware.RateLimiterConfig {
 	}
 }
 
+// if a request is taking too long, kill it after 30s rather than let it tie up a server thread indefinitely.
 func timeoutConfig() middleware.TimeoutConfig {
 	seconds, err := strconv.Atoi(os.Getenv("API_TIMEOUT_IN_SECONDS"))
 	if err != nil || seconds == 0 {
@@ -87,6 +91,10 @@ func timeoutConfig() middleware.TimeoutConfig {
 // its trace. It deliberately does not log the request or response body -- a
 // booking payload carries a patient's name, email and phone number, and there
 // is no reason for that to sit in application logs.
+// for any request that makes it through - a real booking - it writes one JSON line with 5 pieces of info about that req.
+// {"method":"POST","path":"/appointments","status":201,"latency_ms":42,"trace_id":"abc123...","level":"info","msg":"request"}
+
+// MARK THIS AN AREA OF IMPROVEMENT AS IT NEVER LOGS THE 429s, call it after RequestID
 func requestLogger(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		if isHealthCheck(c) {
