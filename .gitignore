@@ -1,4 +1,5 @@
 .env
+.env.docker
 vendor/
 *.log
 e2e_test.sh

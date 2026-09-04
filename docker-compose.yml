@@ -11,7 +11,7 @@ services:
     # Published on 3307, not 3306, so this cannot collide with a MySQL
     # already running on the host.
     ports:
-      - "3307:3306"
+      - "127.0.0.1:3307:3306"
     environment:
       MYSQL_ROOT_PASSWORD: clinic
       MYSQL_DATABASE: clinic
@@ -49,14 +49,28 @@ services:
     networks:
       - clinicnet
     ports:
-      - "6380:6379"
+      - "127.0.0.1:6380:6379"
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 20
-
+  app:
+    build: .
+    container_name: clinic-app
+    restart: unless-stopped
+    networks:
+      - clinicnet
+    ports:
+      - "127.0.0.1:8080:8080"
+    env_file:
+      - .env.docker
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 networks:
   clinicnet:
     driver: bridge
