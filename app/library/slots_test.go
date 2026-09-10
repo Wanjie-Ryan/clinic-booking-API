@@ -20,9 +20,11 @@ func TestGenerateSlots_SingleFullRange(t *testing.T) {
 	date := time.Date(2026, 8, 24, 0, 0, 0, 0, loc)
 
 	slots, err := GenerateSlots(ranges, date, loc, 30*time.Minute)
-	require.NoError(t, err)
+	require.NoError(t, err) // stops immediately if it errored
 
-	assert.Len(t, slots, 10)
+	assert.Len(t, slots, 10) // confirms exactly 10 slots came back
+
+	// assert.Equal(t, expected, actual) // i'm telling you what i expected the answer to be. Now check what the code actually produced. If they match, great, silently move on. If they don't match, fail this test loudly and print both values
 	assert.Equal(t, "08:00", slots[0].In(loc).Format("15:04"))
 	assert.Equal(t, "12:30", slots[len(slots)-1].In(loc).Format("15:04"))
 }
@@ -42,6 +44,7 @@ func TestGenerateSlots_TwoRangesWithBreak(t *testing.T) {
 
 	for _, s := range slots {
 		hm := s.In(loc).Format("15:04")
+		// assert.NotEqual(t, unwanted, actual) i'm telling you a value that should NOT appear. Check what the code produced. If it happens to match this forbidden value, fail loudly, otherwise, move on.
 		assert.NotEqual(t, "13:00", hm)
 		assert.NotEqual(t, "13:30", hm)
 	}

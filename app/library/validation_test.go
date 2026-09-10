@@ -7,6 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// UNIT TESTING
+
 func TestValidateSlot(t *testing.T) {
 	loc := nairobi(t)
 	ranges := []WorkingRange{
@@ -17,12 +19,13 @@ func TestValidateSlot(t *testing.T) {
 	minimumLead := 60 * time.Minute
 	slotDuration := 30 * time.Minute
 
+	// table driven testing - instead of writing 8 separate nearly identical test functions (one per scenario)
 	tests := []struct {
 		name    string
-		start   time.Time
-		wantErr error
+		start   time.Time // input to test
+		wantErr error     // what you expect back
 	}{
-		{"valid aligned slot in first range", time.Date(2026, 8, 24, 9, 0, 0, 0, loc), nil},
+		{"valid aligned slot in first range", time.Date(2026, 8, 24, 9, 0, 0, 0, loc), nil}, // we expect no error, should be a valid booking
 		{"valid aligned slot in second range", time.Date(2026, 8, 24, 15, 30, 0, 0, loc), nil},
 		{"in the past", time.Date(2026, 8, 24, 5, 0, 0, 0, loc), ErrSlotInPast},
 		{"future but inside minimum lead window", time.Date(2026, 8, 24, 6, 30, 0, 0, loc), ErrSlotTooSoon},
@@ -37,6 +40,7 @@ func TestValidateSlot(t *testing.T) {
 			err := ValidateSlot(tt.start, ranges, loc, slotDuration, minimumLead, now)
 			if tt.wantErr == nil {
 				assert.NoError(t, err)
+				// assert records a failure, but lets that specific subtest's remaining code finish running rather than aborting immediately.
 			} else {
 				assert.ErrorIs(t, err, tt.wantErr)
 			}

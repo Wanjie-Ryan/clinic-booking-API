@@ -62,9 +62,22 @@ func ValidateSlot(start time.Time, ranges []WorkingRange, loc *time.Location, sl
 
 		withinAnyRange = true
 
+		// local.Sub(rangeStart) — time.Time.Sub subtracts two instants and gives you back a time.Duration — literally "how much time elapsed between these two points." With real numbers: 10:00 - 08:00 = 2 hours, which as a time.Duration value is 7200000000000 nanoseconds internally, but conceptually just "2 hours."
+
+		// % slotDuration — this is the modulo operator: "divide the first number by the second, give me the leftover remainder." slotDuration = 30 minutes. So: 2 hours % 30 minutes. 2 hours divides evenly into 30-minute chunks — four of them exactly (30+30+30+30=120min=2hrs) — with zero left over. 2hours % 30min == 0 → true.
+
+		// So return nil fires. The function exits immediately, right there, having found a match. nil means "no error" — this is Go's way of saying "everything checked out, this slot is valid." That's the direct answer to your question about the return type: ValidateSlot's signature is func(...) error, and nil is a completely valid value for an error type — it specifically means the absence of an error. The caller (BookAppointment) checks if err := library.ValidateSlot(...); err != nil { ... reject ... } — when err is nil, that if doesn't fire, and the code proceeds to the actual booking logic (the courtesy check, then the INSERT).
 		if local.Sub(rangeStart)%slotDuration == 0 {
 			return nil
 		}
+
+		// prevents another patient from booking into another patients SLOT
+
+		// Your own test file has the exact case that makes this concrete: {"not aligned to the 30-minute grid", 09:15, ErrSlotNotAligned}.
+
+		// Trace 09:15 the same way: it's inside range 1 (before/after checks both pass, same as 10:00), so withinAnyRange = true. But now: 09:15 - 08:00 = 1 hour 15 minutes. 75 minutes % 30 minutes: 75 = 30+30+15, remainder is 15, not zero. So the if doesn't return nil — execution falls past it, the loop moves to the next range (range 2, which 09:15 obviously fails the before/after check against too), the loop ends, and since withinAnyRange is true but nothing ever returned nil, the function reaches the bottom and returns ErrSlotNotAligned.
+
+		// So the modulo check is specifically the "is this exactly on a 30-minute boundary, measured from the doctor's own start time" test. 09:00, 09:30, 10:00 all divide evenly from 08:00 — valid slots. 09:15, 09:45 don't — they'd be asking to start a 30-minute appointment in the middle of what should be someone else's slot.
 	}
 
 	if withinAnyRange {

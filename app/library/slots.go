@@ -60,7 +60,7 @@ func GenerateSlots(ranges []WorkingRange, date time.Time, loc *time.Location, sl
 		}
 
 		// trace the above with real values, slotDuration = 30 minutes
-		// t is assigned start time which is 08:00 then add 30 minutes to it, the condition is is 08:30 After the end which is 13:00, the answer is no. Append 08:00 then advance.
+		// t is assigned start time which is 08:00 then add 30 minutes to it, the condition is 08:30 After the end which is 13:00, the answer is no. Append 08:00 then advance.
 		// It continues like this upto 13:00 where it tries to add 30 minutes to it, and it becomes 13:30, ask again is 13:30 after end time which is 13:00? Answer this time is YES, the loop stops, 13:00 is NOT appended
 		// this produces exactly 10 slots from 08:00 through 12:30
 
@@ -85,10 +85,12 @@ func AvailableSlots(candidates []time.Time, booked map[time.Time]bool, now time.
 
 	// start with  05:00z given the booked which is (07:00z) do they match? false is 05:00 before time.now, which time.now returns a full date + time in UTC, so given that the candidates are all after today, this check will be just pass
 	for _, s := range candidates {
+		// #check 1: IS THIS SLOT ALREADY TAKEN?
 		if booked[s.UTC()] {
 			continue
 			// continue skips to the next loop iteration - it never reaches the append line for that one entry. Everything else reaches append
 		}
+		// CHECK 2: IS THIS SLOT TOO SOON
 		if s.Before(cutoff) {
 			continue
 		}
