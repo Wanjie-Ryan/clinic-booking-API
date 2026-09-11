@@ -3,8 +3,11 @@ CREATE TABLE IF NOT EXISTS doctor_working_hours (
     doctor_id   BIGINT UNSIGNED NOT NULL,
     -- 0 = Sunday ... 6 = Saturday, matches Go's time.Weekday
     day_of_week TINYINT UNSIGNED NOT NULL,
+    -- the type TIME stores only a clock reading - hour, minute, second. No year, no month, no day, no concept of "which day this belongs to" like "08:00" 8 o'clock
+    -- This is the exact reason why we have the function wallClockOn in the code, to convert these BARE VALUE times to DATETIME and compare them to the APPOINTMENTS which are stored as DATETIME
     start_time  TIME NOT NULL,
     end_time    TIME NOT NULL,
+    -- DATETIME stores the whole picture; year, month, day, and hour, minute, second, all together. "2026-08-31 08:00:00"
     created     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),

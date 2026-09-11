@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS appointments (
              ELSE NULL
         END
     ) STORED,
+    -- STORED tells MySQL to physically write this computed value to disk.
 
     created  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
