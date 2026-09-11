@@ -65,6 +65,7 @@ func (controller *Controller) BookAppointment(c echo.Context) error {
 		})
 	}
 
+	// takes a string which is coming from the client and converts it to time.Time
 	start, err := time.Parse(time.RFC3339, req.StartTime)
 	if err != nil {
 		return library.RespondRaw(c, http.StatusBadRequest, models.ErrorResponse{

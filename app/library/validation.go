@@ -70,6 +70,7 @@ func ValidateSlot(start time.Time, ranges []WorkingRange, loc *time.Location, sl
 		if local.Sub(rangeStart)%slotDuration == 0 {
 			return nil
 		}
+		// checks if the booking fits exactly 30 minutes
 
 		// prevents another patient from booking into another patients SLOT
 

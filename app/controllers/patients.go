@@ -81,6 +81,7 @@ func (controller *Controller) GetPatientAppointments(c echo.Context) error {
 	}
 	defer rows.Close()
 
+	// slice
 	appointments := make([]models.AppointmentResponse, 0)
 	for rows.Next() {
 		var id, doctorID int64
