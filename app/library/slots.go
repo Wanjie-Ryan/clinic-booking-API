@@ -14,6 +14,7 @@ type WorkingRange struct {
 
 // wallClockOn resolves a "HH:MM:SS" string to a concrete time.Time on the given date,
 // in the given location.
+// the reason for this function and passing the looped ranges here is because, doctor_working_hours are stored in time, plain time, here we do the conversion from time to dateTime, attach a date there, so that you can compare it to the appointments which are already in dateTime
 func wallClockOn(hhmmss string, year int, month time.Month, day int, loc *time.Location) (time.Time, error) {
 	parsed, err := time.Parse("15:04:05", hhmmss)
 	// extracts hours = 8, minute = 0, second = 0
@@ -90,7 +91,9 @@ func AvailableSlots(candidates []time.Time, booked map[time.Time]bool, now time.
 			continue
 			// continue skips to the next loop iteration - it never reaches the append line for that one entry. Everything else reaches append
 		}
-		// CHECK 2: IS THIS SLOT TOO SOON
+		// CHECK 2: IS THIS SLOT TOO SOON, checks is this slot too soon from now?
+		// is 8:00 before 9:00? Drop it, its too soon for the cutoff time which is 9:00, like 9:00 Am is the time the clinic starts receiving patients
+		// take 10Am is it before 9:00 no, it will pass, why? its past the leadtime, 9:00Am
 		if s.Before(cutoff) {
 			continue
 		}

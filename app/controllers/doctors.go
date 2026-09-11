@@ -25,6 +25,7 @@ import (
 func (controller *Controller) GetDoctorAvailability(c echo.Context) error {
 	ctx, span := controller.Tracer.Start(c.Request().Context(), "GetDoctorAvailability")
 	defer span.End()
+	// tracks the request across different functions and how long the request took broken down into specifics, MySQL,
 
 	startTime := time.Now()
 	defer func() {
@@ -48,7 +49,8 @@ func (controller *Controller) GetDoctorAvailability(c echo.Context) error {
 	}
 
 	// parseInlocation interprets time as in the given location, in the absence of time zone info, Parse inteprets time as UTC
-	// Anchor the date here to Nairobi cause of the Cliniclocation in the controller eg 2026-08-27 becomes Aug 27, 2026, 00:00:00
+	// Anchor the date here to Nairobi cause of the Cliniclocation in the controller eg 2026-08-27 becomes Aug 27, 2026, 00:00:00 (method returns a time.time value)
+
 	date, err := time.ParseInLocation("2006-01-02", dateParam, controller.ClinicLocation)
 	if err != nil {
 		return library.RespondRaw(c, http.StatusBadRequest, models.ErrorResponse{
@@ -226,6 +228,8 @@ func (controller *Controller) GetDoctorAvailability(c echo.Context) error {
 
 	slots := make([]string, 0, len(available))
 	for _, s := range available {
+		// convert each value to a string to send out to the API
+		// the loop walks available one time.Time at a time, calls the .Format on each producing a string like "2026-08-31T07:00:00Z", and appends onto slots
 		slots = append(slots, s.Format(time.RFC3339))
 	}
 
