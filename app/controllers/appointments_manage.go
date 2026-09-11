@@ -167,6 +167,7 @@ func (controller *Controller) RescheduleAppointment(c echo.Context) error {
 		})
 	}
 
+	// convert from string to time.Time
 	newStart, err := time.Parse(time.RFC3339, req.StartTime)
 	if err != nil {
 		return library.RespondRaw(c, http.StatusBadRequest, models.ErrorResponse{
@@ -199,6 +200,7 @@ func (controller *Controller) RescheduleAppointment(c echo.Context) error {
 	err = tx.QueryRowContext(ctx,
 		"SELECT doctor_id, patient_id, status, start_time FROM appointments WHERE id = ? FOR UPDATE", appointmentID).
 		Scan(&doctorID, &patientID, &status, &oldStart)
+		// THIS IS A PESSIMISTIC LOCK
 	if errors.Is(err, sql.ErrNoRows) {
 		tx.Rollback()
 		return library.RespondRaw(c, http.StatusNotFound, models.ErrorResponse{
