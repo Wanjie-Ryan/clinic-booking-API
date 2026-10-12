@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: clinic-booking-api
+    metrics_path: /metrics
+    static_configs:
+      # Container name + internal port, verified with `docker ps` on the VPS.
+      - targets: ["clinic-app:8080"]

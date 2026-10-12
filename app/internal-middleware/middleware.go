@@ -16,7 +16,10 @@ import (
 )
 
 func isHealthCheck(c echo.Context) bool {
-	return c.Request().URL.Path == "/healthz"
+	// /metrics is scraped every 15s by Prometheus; keep it out of the rate
+	// limiter, timeout and the per-request log line.
+	p := c.Request().URL.Path
+	return p == "/healthz" || p == "/metrics"
 }
 
 // corsConfig builds the CORS policy from CORS_ALLOWED_ORIGINS.

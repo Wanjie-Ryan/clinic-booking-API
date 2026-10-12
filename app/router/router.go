@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/trace"
@@ -90,6 +91,9 @@ func (a *App) Initialize(tr trace.Tracer, ctx context.Context) {
 
 func (a *App) setupHealthCheck() {
 	a.E.GET("/healthz", a.GetHealth)
+	// Scraped by Prometheus over the internal docker network. Nginx must not
+	// proxy this path publicly (see deploy/monitoring/README.md).
+	a.E.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
 }
 
 // GetHealth reports MySQL and Redis connectivity.

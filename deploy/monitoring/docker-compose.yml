@@ -1,0 +1,49 @@
+name: clinic-monitoring
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: clinic-prometheus
+    hostname: prometheus
+    restart: unless-stopped
+    networks:
+      - clinicnet
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    # No published port: Prometheus has no auth. Grafana reaches it over clinicnet.
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    container_name: clinic-grafana
+    hostname: grafana
+    restart: unless-stopped
+    networks:
+      - clinicnet
+    ports:
+      # Only host Nginx talks to this; Nginx + Certbot terminate TLS.
+      - "127.0.0.1:3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in deploy/monitoring/.env on the VPS}
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3000}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+
+networks:
+  clinicnet:
+    # Join the app stack's existing network instead of creating a new one.
+    # Verified with `docker network ls` on the VPS: Compose prefixes the project
+    # name, so the app stack's clinicnet is clinic-booking_clinicnet.
+    external: true
+    name: clinic-booking_clinicnet
+
+volumes:
+  prometheus_data:
+  grafana_data:

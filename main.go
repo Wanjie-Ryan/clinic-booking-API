@@ -17,6 +17,8 @@ import (
 	"github.com/uptrace/opentelemetry-go-extra/otellogrus"
 	"github.com/uptrace/uptrace-go/uptrace"
 	"go.opentelemetry.io/otel"
+	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
 	"github.com/Wanjie-Ryan/clinic-booking-API/app/constants"
 	"github.com/Wanjie-Ryan/clinic-booking-API/app/database"
@@ -52,6 +54,16 @@ func main() {
 
 	ctx := context.Background()
 
+	// Second metric reader: a pull-based Prometheus exporter that registers into
+	// client_golang's default registry (served at GET /metrics). It runs alongside
+	// Uptrace's OTLP push reader, so both backends get the same instruments.
+	promExporter, err := otelprom.New()
+	if err != nil {
+		logrus.WithContext(ctx).WithFields(logrus.Fields{
+			constants.DESCRIPTION: "error creating prometheus exporter",
+		}).Fatal(err.Error())
+	}
+
 	uptrace.ConfigureOpentelemetry(
 		uptrace.WithDSN(os.Getenv("UPTRACE_DSN")),
 		uptrace.WithServiceName("clinic-booking-api"),
@@ -59,6 +71,7 @@ func main() {
 		uptrace.WithDeploymentEnvironment(environment),
 		uptrace.WithMetricsEnabled(true),
 		uptrace.WithTracingEnabled(true),
+		uptrace.WithMetricOption(sdkmetric.WithReader(promExporter)),
 	)
 	defer uptrace.Shutdown(ctx)
 
