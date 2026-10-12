@@ -160,6 +160,8 @@ func TestBookAppointment_ConcurrentBookingsOnlyOneSucceeds(t *testing.T) {
 // TestBookAppointment_RejectsOutsideWorkingHours checks the controller-level
 // wiring of library.ValidateSlot, not just the library function itself (which
 // already has its own unit tests in app/library).
+
+// 8:00 - 12:30 
 func TestBookAppointment_RejectsOutsideWorkingHours(t *testing.T) {
 	controller := newTestController(t)
 	e := echo.New()
