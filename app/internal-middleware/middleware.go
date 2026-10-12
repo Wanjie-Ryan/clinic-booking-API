@@ -132,7 +132,9 @@ func SetupMiddlewares(tr trace.Tracer, e *echo.Echo) {
 	e.Use(middleware.CORSWithConfig(corsConfig()))
 	e.Use(otelecho.Middleware(deploymentName))
 	e.Use(middleware.RateLimiterWithConfig(rateLimiterConfig()))
-	e.Use(middleware.Gzip())
+	// promhttp already gzips /metrics itself when the scraper asks for it; letting
+	// this middleware compress it a second time makes Prometheus fail to parse it.
+	e.Use(middleware.GzipWithConfig(middleware.GzipConfig{Skipper: isHealthCheck}))
 	e.Use(requestLogger)
 	e.Use(middleware.TimeoutWithConfig(timeoutConfig()))
 }
