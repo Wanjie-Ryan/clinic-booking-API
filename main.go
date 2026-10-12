@@ -75,6 +75,14 @@ func main() {
 	)
 	defer uptrace.Shutdown(ctx)
 
+	// uptrace-go returns early ("Uptrace is disabled") on an empty/invalid DSN and
+	// never builds a MeterProvider, so the reader passed via WithMetricOption above
+	// would never be attached and /metrics would stay empty. In that case build our
+	// own provider with just the Prometheus reader.
+	if _, ok := otel.GetMeterProvider().(*sdkmetric.MeterProvider); !ok {
+		otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(promExporter)))
+	}
+
 	tracer := otel.Tracer("clinic-booking-api")
 	ctx, mainSpan := tracer.Start(ctx, "main")
 	defer mainSpan.End()
